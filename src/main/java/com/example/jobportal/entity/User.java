@@ -48,7 +48,3 @@ public class User {
 //        this.createdAt = LocalDateTime.now();
 //    }
 }
-enum UserType {
-    JOB_SEEKER,
-    EMPLOYER
-}
