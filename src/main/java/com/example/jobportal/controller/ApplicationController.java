@@ -1,9 +1,11 @@
 package com.example.jobportal.controller;
 
-
 import com.example.jobportal.entity.Application;
 import com.example.jobportal.entity.ApplicationStatus;
+import com.example.jobportal.entity.User;
+import com.example.jobportal.entity.UserType;
 import com.example.jobportal.service.ApplicationService;
+import com.example.jobportal.service.AuthService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -17,14 +19,20 @@ import java.util.Optional;
 public class ApplicationController {
 
     private final ApplicationService applicationService;
+    private final AuthService authService;
 
-    // Apply for job - moved to top to avoid conflicts
     @PostMapping("/apply")
     public ResponseEntity<?> applyForJob(@RequestBody ApplyJobRequest request) {
         try {
+            User currentUser = authService.getCurrentUser();
+
+            if (currentUser.getUserType() != UserType.JOB_SEEKER) {
+                return ResponseEntity.badRequest().body("Only job seekers can apply for jobs");
+            }
+
             Application application = applicationService.applyForJob(
                     request.getJobId(),
-                    request.getJobSeekerId(),
+                    currentUser.getId(),
                     request.getCoverLetter()
             );
             return ResponseEntity.ok("Application submitted successfully! Application ID: " + application.getId());
@@ -33,45 +41,69 @@ public class ApplicationController {
         }
     }
 
-    // Get applications by jobseeker
-    @GetMapping("/job-seeker/{jobSeekerId}")
-    public ResponseEntity<List<Application>> getMyApplications(@PathVariable Long jobSeekerId) {
-        List<Application> applications = applicationService.getMyApplications(jobSeekerId);
-        return ResponseEntity.ok(applications);
+    @GetMapping("/my-applications")
+    public ResponseEntity<?> getMyApplications() {
+        try {
+            User currentUser = authService.getCurrentUser();
+
+            if (currentUser.getUserType() != UserType.JOB_SEEKER) {
+                return ResponseEntity.badRequest().body("Only job seekers can view applications");
+            }
+
+            List<Application> applications = applicationService.getMyApplications(currentUser.getId());
+            return ResponseEntity.ok(applications);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
-    // Get applications for a specific job (employer view)
     @GetMapping("/for-job/{jobId}")
-    public ResponseEntity<?> getApplicationsForJob(@PathVariable Long jobId, @RequestParam Long employerId) {
+    public ResponseEntity<?> getApplicationsForJob(@PathVariable Long jobId) {
         try {
-            List<Application> applications = applicationService.getApplicationsForJob(jobId, employerId);
+            User currentUser = authService.getCurrentUser();
+
+            if (currentUser.getUserType() != UserType.EMPLOYER) {
+                return ResponseEntity.badRequest().body("Only employers can view job applications");
+            }
+
+            List<Application> applications = applicationService.getApplicationsForJob(jobId, currentUser.getId());
             return ResponseEntity.ok(applications);
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
 
-    // Get all applications for an employer
-    @GetMapping("/for-employer/{employerId}")
-    public ResponseEntity<?> getAllApplicationsForEmployer(@PathVariable Long employerId) {
+    @GetMapping("/for-my-jobs")
+    public ResponseEntity<?> getAllMyJobApplications() {
         try {
-            List<Application> applications = applicationService.getAllApplicationsForEmployer(employerId);
+            User currentUser = authService.getCurrentUser();
+
+            if (currentUser.getUserType() != UserType.EMPLOYER) {
+                return ResponseEntity.badRequest().body("Only employers can view applications");
+            }
+
+            List<Application> applications = applicationService.getAllApplicationsForEmployer(currentUser.getId());
             return ResponseEntity.ok(applications);
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
 
-    // Update application status
     @PutMapping("/update-status/{applicationId}")
     public ResponseEntity<?> updateApplicationStatus(
             @PathVariable Long applicationId,
             @RequestBody UpdateStatusRequest request) {
         try {
+            User currentUser = authService.getCurrentUser();
+
+            if (currentUser.getUserType() != UserType.EMPLOYER) {
+                return ResponseEntity.badRequest().body("Only employers can update application status");
+            }
+
             Application updatedApplication = applicationService.updateApplicationStatus(
                     applicationId,
                     request.getStatus(),
-                    request.getEmployerId()
+                    currentUser.getId()
             );
             return ResponseEntity.ok("Application status updated to: " + updatedApplication.getStatus());
         } catch (RuntimeException e) {
@@ -79,35 +111,48 @@ public class ApplicationController {
         }
     }
 
-    // Get application count for a job
+    @GetMapping("/details/{applicationId}")
+    public ResponseEntity<?> getApplicationById(@PathVariable Long applicationId) {
+        try {
+            User currentUser = authService.getCurrentUser();
+            Optional<Application> application = applicationService.getApplicationById(applicationId);
+
+            if (application.isEmpty()) {
+                return ResponseEntity.notFound().build();
+            }
+
+            Application app = application.get();
+
+            // Check permissions: either the job seeker who applied or the employer who owns the job
+            boolean isJobSeeker = currentUser.getId().equals(app.getJobSeeker().getId());
+            boolean isEmployer = currentUser.getId().equals(app.getJob().getEmployer().getId());
+
+            if (!isJobSeeker && !isEmployer) {
+                return ResponseEntity.badRequest().body("You can only view your own applications or applications for your jobs");
+            }
+
+            return ResponseEntity.ok(app);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    // Public endpoint - no authentication needed
     @GetMapping("/count-for-job/{jobId}")
     public ResponseEntity<Long> getApplicationCount(@PathVariable Long jobId) {
         long count = applicationService.getApplicationCountForJob(jobId);
         return ResponseEntity.ok(count);
     }
-
-    // Get single application by ID - moved to bottom to avoid conflicts
-    @GetMapping("/details/{applicationId}")
-    public ResponseEntity<Application> getApplicationById(@PathVariable Long applicationId) {
-        Optional<Application> application = applicationService.getApplicationById(applicationId);
-        if (application.isPresent()) {
-            return ResponseEntity.ok(application.get());
-        } else {
-            return ResponseEntity.notFound().build();
-        }
-    }
 }
 
-// Request DTOs
+// Clean request DTOs
 @Data
 class ApplyJobRequest {
     private Long jobId;
-    private Long jobSeekerId;
-    private String coverLetter; // Optional
+    private String coverLetter;
 }
 
 @Data
 class UpdateStatusRequest {
     private ApplicationStatus status;
-    private Long employerId; // Who is updating the status
 }

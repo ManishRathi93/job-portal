@@ -1,6 +1,7 @@
 package com.example.jobportal.controller;
 
 import com.example.jobportal.entity.User;
+import com.example.jobportal.service.AuthService;
 import com.example.jobportal.service.UserService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -15,7 +16,9 @@ import java.util.Optional;
 public class UserController {
 
     private final UserService userService;
+    private final AuthService authService;
 
+    // Public endpoints - for backward compatibility (you can remove these later)
     @PostMapping("/register")
     public ResponseEntity<?> registerUser(@RequestBody User user) {
         try {
@@ -26,35 +29,73 @@ public class UserController {
         }
     }
 
-    @PostMapping("/login")
-    public ResponseEntity<?> loginUser(@RequestBody LoginRequest loginRequest) {
-        Optional<User> user = userService.loginUser(loginRequest.getEmail(), loginRequest.getPassword());
-        if (user.isPresent()) {
-            return ResponseEntity.ok("Login successful! Welcome " + user.get().getFullName());
-        } else {
-            return ResponseEntity.badRequest().body("Invalid email or password");
+    // Protected endpoints - require authentication
+    @GetMapping("/me")
+    public ResponseEntity<?> getCurrentUser() {
+        try {
+            User currentUser = authService.getCurrentUser();
+
+            // Don't return password in response
+            User safeUser = new User();
+            safeUser.setId(currentUser.getId());
+            safeUser.setEmail(currentUser.getEmail());
+            safeUser.setFullName(currentUser.getFullName());
+            safeUser.setUserType(currentUser.getUserType());
+            safeUser.setCreatedAt(currentUser.getCreatedAt());
+
+            return ResponseEntity.ok(safeUser);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
 
+    @PutMapping("/update-profile")
+    public ResponseEntity<?> updateProfile(@RequestBody UpdateProfileRequest request) {
+        try {
+            User currentUser = authService.getCurrentUser();
+
+            // Update allowed fields
+            currentUser.setFullName(request.getFullName());
+            // Don't allow email or password changes here (should be separate endpoints)
+
+            userService.updateUser(currentUser);
+            return ResponseEntity.ok("Profile updated successfully!");
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    // Admin endpoints (you can add role-based security later)
     @GetMapping("/all")
-    public List<User> getAllUsers() {
-        return userService.getAllUsers();
+    public ResponseEntity<?> getAllUsers() {
+        try {
+            User currentUser = authService.getCurrentUser();
+            // For now, any authenticated user can see this (you can add admin role later)
+
+            List<User> users = userService.getAllUsers();
+            return ResponseEntity.ok(users);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<User> getUserById(@PathVariable Long id) {
-        Optional<User> user = userService.getUserById(id);
-        if (user.isPresent()) {
-            return ResponseEntity.ok(user.get());
-        } else {
-            return ResponseEntity.notFound().build();
+        try {
+            // Ensure user is authenticated
+            authService.getCurrentUser();
+
+            Optional<User> user = userService.getUserById(id);
+            return user.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().build();
         }
     }
 }
 
-// Simple class for login request
+// Request DTO for profile updates
 @Data
-class LoginRequest {
-    private String email;
-    private String password;
+class UpdateProfileRequest {
+    private String fullName;
+    // Add other fields as needed (phone, skills, etc.)
 }
